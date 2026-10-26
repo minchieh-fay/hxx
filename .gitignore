@@ -29,6 +29,9 @@ rustc-ice-*.txt
 /codex/workspace/
 /frontend/node_modules/
 /frontend/dist/
+[0-9].md
+[0-9].log
+[0-9].txt
 
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
