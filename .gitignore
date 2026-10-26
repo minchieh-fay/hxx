@@ -16,6 +16,20 @@ target
 # rustc will dump stack traces when hitting an internal compiler error to PWD
 rustc-ice-*.txt
 
+# Local credentials, app-server state, and downloaded runtime binaries
+/.env
+/codex/.env
+/codex/AGENTS.local.md
+/codex/desc.local.md
+/codex/docker-compose.yaml
+/codex/codex-bin/
+/codex/artifacts/
+/codex/home/
+/codex/secrets/
+/codex/workspace/
+/frontend/node_modules/
+/frontend/dist/
+
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
