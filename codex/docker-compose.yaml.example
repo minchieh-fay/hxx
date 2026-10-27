@@ -3,6 +3,8 @@ services:
     image: codex-web:latest
     container_name: codex-app-server
     restart: unless-stopped
+    ports:
+      - "${CODEX_BIND_ADDRESS:-127.0.0.1}:4500:4500"
     environment:
       CODEX_HOME: /codex-home
       OPENAI_API_KEY: "${OPENAI_API_KEY:?Set OPENAI_API_KEY in .env}"

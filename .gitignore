@@ -18,8 +18,11 @@ rustc-ice-*.txt
 
 # Local credentials, app-server state, and downloaded runtime binaries
 /.env
+/hxx.toml
+/data/
 /codex/.env
 /codex/AGENTS.local.md
+/docs/AGENTS.local.md
 /codex/desc.local.md
 /codex/docker-compose.yaml
 /codex/codex-bin/
@@ -32,6 +35,7 @@ rustc-ice-*.txt
 [0-9].md
 [0-9].log
 [0-9].txt
+tmp
 
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can

@@ -1,0 +1,5 @@
+[audit]
+enabled = true
+directory = "data/audit"
+# Keep false outside local debugging; request and response bodies may contain sensitive text.
+include_payloads = false

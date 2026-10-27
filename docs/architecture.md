@@ -35,11 +35,25 @@ Codex App Server
 
 ## App Server 生命周期
 
-- 创建会话时调用 `thread/start`，为线程分配工作目录并保存 `threadId`。
+- 创建会话时调用 `thread/start`，为线程分配工作目录并保存 `threadId`；首轮复用创建连接启动，持续接收线程事件。
 - 恢复会话时调用 `thread/resume`，并通过线程历史接口重建 UI。
 - `CODEX_HOME` 是 App Server 进程级状态目录；`cwd` 是会话或任务的工作目录，两者职责不同。
 - 浏览器断线后重新连接并从持久化线程历史恢复界面，不假定断线期间的每个流式事件都会自动重放。
+- 当前 Codex 部署使用 YOLO 模式；HXX 创建线程和轮次时显式设置 `approvalPolicy=never` 与 `sandbox=danger-full-access`。
+- App Server 如果仍发起命令、文件变更或额外权限审批，HXX 会在会话中显示请求详情并提供批准和拒绝操作。
+- HXX 从 `hxx.toml` 读取运行配置；协议审计按日追加到 JSONL，正文采集通过 `audit.include_payloads` 单独控制。
 - `codex-code-mode-host` 如启用，应与 Codex CLI 使用同一 release 和目标平台。
+
+## HXX 首版行为
+
+- HXX 开发期间在开发机本地运行 Rust API 和 Vue 页面，通过 `CODEX_WS_URL` 连接开发服务器上的 App Server。
+- 浏览器在 `localStorage` 中保存稳定 ID，用于区分用户和隔离会话；该 ID 不提供身份认证。
+- 用户可设置显示名称，后端记录最近访问 IP 供内网排查问题。
+- 每个浏览器最多保留十个会话；创建新会话时删除最早的会话并归档对应 Codex 线程，历史用量记录继续保留。
+- Codex 工作目录按 `/workspaces/{client_id}/{session_id}` 分开，对应 App Server 的 `workspace/` 挂载目录。
+- 助手文本增量、执行计划和命令/工具活动写入会话，前端以短轮询展示执行状态和秒级耗时，不暴露内部推理内容。
+- SQLite 保存用户、会话、消息和每轮请求 token 用量；仪表盘按本机时区汇总当天、本周和本月数据。
+- 当实时轮次事件缺少最终消息时，HXX 查询 App Server 完整线程历史恢复助手文本和工具活动；未确认完成的轮次会作为错误显示，不保存为空回复。
 
 ## Web 技术栈
 
