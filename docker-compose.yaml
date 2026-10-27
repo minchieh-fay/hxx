@@ -7,7 +7,7 @@ services:
     entrypoint: ["/usr/bin/tini", "--"]
     command: ["/app/hxx-web"]
     ports:
-      - "0.0.0.0:3000:3000"
+      - "0.0.0.0:18083:3000"
     volumes:
       - ./hxx-web:/app/hxx-web:ro
       - ./frontend/dist:/app/frontend/dist:ro
