@@ -22,6 +22,10 @@ The App Server listens on port 4500 inside the configured Docker network and
 requires the capability token in the WebSocket `Authorization: Bearer` header.
 Do not publish the port directly to the public network.
 
+The runtime image includes Python 3, Node.js 22 with npm, Bun, sshpass, tcpdump,
+and common build and network diagnostic tools. Packet capture still depends on
+the capabilities granted to the running container.
+
 Codex CLI and `codex-code-mode-host` must come from the same release and match
 the container's Linux architecture. Keep downloaded binaries and local runtime
 state out of Git; `.gitignore` already excludes those paths.
