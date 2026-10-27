@@ -262,13 +262,108 @@ button {
   color: #303936;
   font-family: inherit;
   font-size: 14px;
-  line-height: 1.7;
-  white-space: pre-wrap;
+  line-height: 1.55;
   overflow-wrap: anywhere;
 }
 
-.message-row[data-role="user"] .message-content {
+.markdown-preview {
+  white-space: pre-wrap;
+}
+
+.message-content > :first-child {
+  margin-top: 0;
+}
+
+.message-content > :last-child {
+  margin-bottom: 0;
+}
+
+.message-content p,
+.message-content ul,
+.message-content ol,
+.message-content blockquote,
+.message-content pre,
+.message-content table {
+  margin: 0 0 6px;
+}
+
+.message-content h1,
+.message-content h2,
+.message-content h3,
+.message-content h4,
+.message-content h5,
+.message-content h6 {
+  margin: 10px 0 5px;
+  color: inherit;
+  font-size: 1.08em;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.message-content > h1:first-child,
+.message-content > h2:first-child,
+.message-content > h3:first-child,
+.message-content > h4:first-child,
+.message-content > h5:first-child,
+.message-content > h6:first-child {
+  margin-top: 0;
+}
+
+.message-content ul,
+.message-content ol {
+  padding-left: 20px;
+}
+
+.message-content blockquote {
+  padding-left: 10px;
+  color: #65716b;
+  border-left: 3px solid #cdd7d2;
+}
+
+.message-content :not(pre) > code {
+  padding: 2px 5px;
+  color: #39443f;
+  background: #edf1ef;
+  border-radius: 3px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.92em;
+}
+
+.message-content pre {
+  overflow-x: auto;
   padding: 12px 14px;
+  color: #e9efec;
+  background: #26332e;
+  border-radius: 5px;
+}
+
+.message-content pre code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  white-space: pre;
+}
+
+.message-content table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.message-content th,
+.message-content td {
+  padding: 6px 10px;
+  border: 1px solid #d8e0dc;
+  text-align: left;
+}
+
+.message-content th {
+  background: #f3f6f5;
+}
+
+.message-row[data-role="user"] .message-content {
+  padding: 10px 12px;
   background: #f3f6f5;
   border-left: 3px solid #54a287;
   border-radius: 0 5px 5px 0;

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import MarkdownIt from 'markdown-it'
 
 /** 描述当前浏览器对应的用户身份和最近访问 IP。 */
 interface Profile {
@@ -92,6 +93,11 @@ const clockNow = ref(Date.now())
 let refreshTimer: ReturnType<typeof setTimeout> | undefined
 let clockTimer: ReturnType<typeof setInterval> | undefined
 const form = reactive({ topic: '', environment: '', issue: '', work: '', notes: '' })
+const markdown = new MarkdownIt({
+  html: false,
+  linkify: false,
+  breaks: false,
+})
 
 /** 在 HTTP 内网环境也生成浏览器会话使用的 UUID。 */
 function createClientId(): string {
@@ -122,6 +128,11 @@ const previewMarkdown = computed(() => [
   `# 希望 Codex 完成的工作\n${form.work}`,
   `# 备注\n${form.notes}`,
 ].join('\n\n'))
+
+/** 将会话正文转换为禁用原始 HTML 的安全 Markdown。 */
+function renderMarkdown(content: string): string {
+  return markdown.render(content)
+}
 
 /** 为当前浏览器身份添加请求头并解码 HXX API 响应。 */
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -613,7 +624,7 @@ onUnmounted(() => {
                   <span>{{ message.role === 'user' ? profile?.name ?? '我' : 'Codex' }}</span>
                   <time>{{ formatTime(message.created_at) }}</time>
                 </div>
-                <pre class="message-content">{{ message.content }}</pre>
+                <div class="message-content" v-html="renderMarkdown(message.content)"></div>
               </article>
             </template>
             <section v-if="activeSession.activities.length" class="activity-list">
