@@ -6,10 +6,9 @@ over its authenticated WebSocket endpoint.
 
 ## Local Development
 
-1. Copy `.env.example` to `.env` and set `CODEX_WS_URL` to the development
-   server's port `4500` endpoint. Keep the App Server token in a local file and
-   set `CODEX_WS_TOKEN_FILE` to its path. Set the SSH workspace variables to
-   create per-session directories in the server's mounted `workspace/` volume.
+1. Copy `hxx.toml.example` to `hxx.toml`, then set the Codex URL, token file,
+   and SSH workspace settings in its `[codex]` section. Keep the App Server
+   token in a separate local file.
 2. Start the Rust API from the repository root:
 
    ```sh

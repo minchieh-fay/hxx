@@ -1,4 +1,4 @@
-use std::{collections::HashMap, env, sync::Arc};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 use anyhow::{Context, Result, anyhow};
 use futures_util::{SinkExt, StreamExt};
@@ -15,6 +15,7 @@ use tokio_tungstenite::{
 };
 
 use crate::audit::AuditLog;
+use crate::config::CodexConfig;
 
 /// 表示 HXX 与 Codex App Server 之间可复用的 WebSocket 连接。
 type AppServerSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -55,6 +56,10 @@ struct ApprovalPrompt {
 #[derive(Clone)]
 pub struct CodexClient {
     url: String,
+    token_file: std::path::PathBuf,
+    workspace_ssh_target: Option<String>,
+    workspace_ssh_root: Option<std::path::PathBuf>,
+    workspace_root: Option<std::path::PathBuf>,
     audit: AuditLog,
     active_turns: Arc<Mutex<HashMap<String, String>>>,
     approval_senders: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<ApprovalResponse>>>>,
@@ -63,10 +68,14 @@ pub struct CodexClient {
 
 /// 创建连接到远程 App Server 的客户端。
 impl CodexClient {
-    /// 读取 App Server 地址并初始化运行中轮次记录。
-    pub fn from_env(audit: AuditLog) -> Self {
+    /// 使用统一配置创建 App Server 客户端和工作区管理器。
+    pub fn new(config: CodexConfig, audit: AuditLog) -> Self {
         Self {
-            url: env::var("CODEX_WS_URL").unwrap_or_else(|_| "ws://127.0.0.1:4500".to_owned()),
+            url: config.ws_url,
+            token_file: config.token_file,
+            workspace_ssh_target: config.workspace_ssh_target,
+            workspace_ssh_root: config.workspace_ssh_root,
+            workspace_root: config.workspace_root,
             audit,
             active_turns: Arc::new(Mutex::new(HashMap::new())),
             approval_senders: Arc::new(Mutex::new(HashMap::new())),
@@ -91,16 +100,18 @@ impl CodexClient {
         }
     }
 
-    /// 生成远程工作目录，并按本地调试配置通过 SSH 预创建目录。
+    /// 生成工作目录，并通过 SSH 或容器共享卷预创建会话目录。
     pub async fn prepare_workspace(&self, client_id: &str, session_id: &str) -> Result<String> {
         // step.1 按浏览器和会话 ID 生成 App Server 容器内的工作路径。
         let cwd = format!("/workspaces/{client_id}/{session_id}");
 
-        // step.2 配置 SSH 时在服务器挂载卷中建目录并设置容器用户权限。
-        if let Ok(target) = env::var("CODEX_WORKSPACE_SSH_TARGET") {
-            let root = env::var("CODEX_WORKSPACE_SSH_ROOT")
-                .context("设置 SSH 目标时还必须配置 CODEX_WORKSPACE_SSH_ROOT")?;
-            let remote_path = format!("{root}/{client_id}/{session_id}");
+        // step.2 通过 SSH 或共享卷创建会话目录，供 Codex App Server 使用。
+        if let Some(target) = &self.workspace_ssh_target {
+            let root = self
+                .workspace_ssh_root
+                .as_ref()
+                .context("设置 SSH 目标时还必须配置 workspace_ssh_root")?;
+            let remote_path = format!("{}/{client_id}/{session_id}", root.display());
             let quoted_path = format!("'{}'", remote_path.replace('\'', "'\\''"));
             let command =
                 format!("mkdir -p -- {quoted_path} && chown -R 10001:10001 -- {quoted_path}");
@@ -114,6 +125,11 @@ impl CodexClient {
             if !status.success() {
                 return Err(anyhow!("SSH 创建远程 Codex 工作目录失败"));
             }
+        } else if let Some(root) = &self.workspace_root {
+            let path = root.join(client_id).join(session_id);
+            tokio::fs::create_dir_all(&path)
+                .await
+                .with_context(|| format!("无法创建 Codex 会话工作目录 {}", path.display()))?;
         }
         Ok(cwd)
     }
@@ -312,7 +328,7 @@ impl CodexClient {
         };
         let started_thread_socket = socket.is_some();
         if socket.is_none() {
-            let token = read_token().await?;
+            let token = read_token(&self.token_file).await?;
             let mut request = self.url.as_str().into_client_request()?;
             request.headers_mut().insert(
                 "Authorization",
@@ -1013,16 +1029,11 @@ fn legacy_activity(value: &Value) -> Option<CodexEvent> {
     })
 }
 
-/// 从环境变量或本地 token 文件读取 App Server capability token。
-async fn read_token() -> Result<String> {
-    if let Ok(token) = env::var("CODEX_WS_TOKEN") {
-        return Ok(token.trim().to_owned());
-    }
-    let path = env::var("CODEX_WS_TOKEN_FILE")
-        .unwrap_or_else(|_| "codex/secrets/app-server-token".to_owned());
+/// 从统一配置指定的本地文件读取 App Server capability token。
+async fn read_token(path: &Path) -> Result<String> {
     tokio::fs::read_to_string(path)
         .await
-        .context("请设置 CODEX_WS_TOKEN 或 CODEX_WS_TOKEN_FILE")
+        .with_context(|| format!("无法读取 Codex App Server token 文件 {}", path.display()))
         .map(|token| token.trim().to_owned())
 }
 

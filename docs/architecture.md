@@ -46,7 +46,7 @@ Codex App Server
 
 ## HXX 首版行为
 
-- HXX 开发期间在开发机本地运行 Rust API 和 Vue 页面，通过 `CODEX_WS_URL` 连接开发服务器上的 App Server。
+- HXX 开发期间在开发机本地运行 Rust API 和 Vue 页面，通过 `hxx.toml` 的 `[codex].ws_url` 连接开发服务器上的 App Server。
 - 浏览器在 `localStorage` 中保存稳定 ID，用于区分用户和隔离会话；该 ID 不提供身份认证。
 - 用户可设置显示名称，后端记录最近访问 IP 供内网排查问题。
 - 每个浏览器最多保留十个会话；创建新会话时删除最早的会话并归档对应 Codex 线程，历史用量记录继续保留。

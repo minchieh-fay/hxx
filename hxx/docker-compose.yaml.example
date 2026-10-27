@@ -6,19 +6,14 @@ services:
     working_dir: /app
     entrypoint: ["/usr/bin/tini", "--"]
     command: ["/app/hxx-web"]
-    environment:
-      HXX_BIND: 0.0.0.0:3000
-      HXX_DATABASE_PATH: /app/data/hxx.sqlite
-      HXX_CONFIG_PATH: /app/hxx.toml
-      CODEX_WS_URL: ws://codex.internal:4500
-      CODEX_WS_TOKEN_FILE: /run/secrets/codex-ws-token
     ports:
-      - "${HXX_BIND_ADDRESS:-127.0.0.1}:3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       - ./hxx-web:/app/hxx-web:ro
       - ./frontend/dist:/app/frontend/dist:ro
       - ./data:/app/data
       - ./hxx.toml:/app/hxx.toml:ro
+      - ../codex/workspace:/workspaces
       - ../codex/secrets/app-server-token:/run/secrets/codex-ws-token:ro
     healthcheck:
       test:

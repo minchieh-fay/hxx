@@ -7,7 +7,6 @@ edition = "2024"
 anyhow = "1"
 axum = { version = "0.8", features = ["json"] }
 chrono = { version = "0.4", features = ["serde"] }
-dotenvy = "0.15"
 futures-util = "0.3"
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

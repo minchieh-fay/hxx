@@ -1,3 +1,16 @@
+[server]
+bind = "127.0.0.1:3000"
+database_path = "data/hxx.sqlite"
+
+[codex]
+ws_url = "ws://codex-host:4500"
+token_file = "codex/secrets/app-server-token"
+# Set these for local development when HXX creates workspaces over SSH.
+workspace_ssh_target = "codex-host"
+workspace_ssh_root = "/path/to/codex/workspace"
+# Use this when HXX and Codex share a mounted workspace volume.
+# workspace_root = "/workspaces"
+
 [audit]
 enabled = true
 directory = "data/audit"
