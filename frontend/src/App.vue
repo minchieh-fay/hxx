@@ -71,7 +71,7 @@ const identityKey = 'hxx-client-id'
 const nameKey = 'hxx-client-name'
 let clientId = localStorage.getItem(identityKey)
 if (!clientId) {
-  clientId = crypto.randomUUID()
+  clientId = createClientId()
   localStorage.setItem(identityKey, clientId)
 }
 
@@ -92,6 +92,28 @@ const clockNow = ref(Date.now())
 let refreshTimer: ReturnType<typeof setTimeout> | undefined
 let clockTimer: ReturnType<typeof setInterval> | undefined
 const form = reactive({ topic: '', environment: '', issue: '', work: '', notes: '' })
+
+/** 在 HTTP 内网环境也生成浏览器会话使用的 UUID。 */
+function createClientId(): string {
+  const bytes = new Uint8Array(16)
+  if (typeof window.crypto?.getRandomValues === 'function') {
+    window.crypto.getRandomValues(bytes)
+  } else {
+    for (let index = 0; index < bytes.length; index += 1) {
+      bytes[index] = Math.floor(Math.random() * 256)
+    }
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, '0'))
+  return [
+    hex.slice(0, 4).join(''),
+    hex.slice(4, 6).join(''),
+    hex.slice(6, 8).join(''),
+    hex.slice(8, 10).join(''),
+    hex.slice(10, 16).join(''),
+  ].join('-')
+}
 
 const previewMarkdown = computed(() => [
   `# 主题\n${form.topic}`,
