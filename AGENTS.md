@@ -42,6 +42,7 @@
   `cargo zigbuild --release --target x86_64-unknown-linux-gnu.2.36`。
 - 不在开发服务器编译 HXX，不使用 HXX Dockerfile 构建或发布 HXX 镜像。只将后端可执行文件和前端 `dist/` 传到本机部署说明指定的 HXX 目录。
 - HXX 服务复用 `codex-web:latest` 作为运行环境。Compose 必须同时覆盖镜像默认的 Codex `entrypoint` 和 `command`，以 `/usr/bin/tini -- /app/hxx-web` 启动 HXX；工作目录设为 `/app`，前端静态文件位于 `/app/frontend/dist`。
+- HXX 的服务、Codex、token 文件路径、工作区和审计设置统一保存在 `hxx.toml`；部署时挂载该文件，不为 HXX 另建 `.env` 或 Compose `env_file`。
 - 部署目录中的二进制和 `frontend/dist/` 以只读卷挂载；SQLite、审计日志等运行数据使用独立可写目录。容器以镜像默认 UID `10001` 运行，部署前确保数据目录归该 UID 写入。
 - HXX 与 Codex App Server 加入已有外部 `app-net` 网络，HXX 服务使用 `hxx.internal` 别名并通过 `ws://codex.internal:4500` 连接；capability token 从只读挂载的秘密文件读取，不写入 Compose 样例、命令行或 Git。
 - 传输时只更新后端二进制和前端构建产物。若需修改服务器上的 `docker-compose.yaml`，只合并本次变更字段，保留服务器的本地配置；不要用仓库样例覆盖整份文件。变更后在服务器运行 `docker-compose config` 检查，再按本机部署说明启动或重建 HXX 服务。

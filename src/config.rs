@@ -1,4 +1,4 @@
-use std::{env, path::PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -88,9 +88,9 @@ impl Default for AuditConfig {
 /// 从本地 TOML 文件读取配置，文件不存在时使用调试默认值。
 impl HxxConfig {
     pub fn load() -> Result<Self> {
-        // step.1 读取环境变量指定的配置路径或默认本地配置文件。
-        let path = env::var("HXX_CONFIG_PATH").unwrap_or_else(|_| "hxx.toml".to_owned());
-        let contents = match std::fs::read_to_string(&path) {
+        // step.1 从当前工作目录读取统一 TOML 配置文件。
+        let path = "hxx.toml";
+        let contents = match std::fs::read_to_string(path) {
             Ok(contents) => contents,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Self::default());
