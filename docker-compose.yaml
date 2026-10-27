@@ -1,7 +1,7 @@
 services:
   hxx:
     image: codex-web:latest
-    container_name: hxx
+    container_name: hxx-web
     restart: unless-stopped
     working_dir: /app
     entrypoint: ["/usr/bin/tini", "--"]
@@ -28,7 +28,7 @@ services:
     networks:
       app-net:
         aliases:
-          - hxx.internal
+          - hxx-web.internal
 
 networks:
   app-net:

@@ -48,3 +48,4 @@
 - HXX 与 Codex App Server 加入已有外部 `app-net` 网络，HXX 服务使用 `hxx.internal` 别名并通过 `ws://codex.internal:4500` 连接；capability token 从只读挂载的秘密文件读取，不写入 Compose 样例、命令行或 Git。
 - 传输时只更新后端二进制和前端构建产物。若需修改服务器上的 `docker-compose.yaml`，只合并本次变更字段，保留服务器的本地配置；不要用仓库样例覆盖整份文件。变更后在服务器运行 `docker-compose config` 检查，再按本机部署说明启动或重建 HXX 服务。
 - 服务器地址、部署绝对路径和个人凭据只记录在被 `.gitignore` 排除的 `docs/AGENTS.local.md`，不得复制到本文件或提交到 Git。
+
