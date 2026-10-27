@@ -1,0 +1,41 @@
+services:
+  hxx:
+    image: codex-web:latest
+    container_name: hxx
+    restart: unless-stopped
+    working_dir: /app
+    entrypoint: ["/usr/bin/tini", "--"]
+    command: ["/app/hxx-web"]
+    environment:
+      HXX_BIND: 0.0.0.0:3000
+      HXX_DATABASE_PATH: /app/data/hxx.sqlite
+      HXX_CONFIG_PATH: /app/hxx.toml
+      CODEX_WS_URL: ws://codex.internal:4500
+      CODEX_WS_TOKEN_FILE: /run/secrets/codex-ws-token
+    ports:
+      - "${HXX_BIND_ADDRESS:-127.0.0.1}:3000:3000"
+    volumes:
+      - ./hxx-web:/app/hxx-web:ro
+      - ./frontend/dist:/app/frontend/dist:ro
+      - ./data:/app/data
+      - ./hxx.toml:/app/hxx.toml:ro
+      - ../codex/secrets/app-server-token:/run/secrets/codex-ws-token:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://127.0.0.1:3000/api/health >/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks:
+      app-net:
+        aliases:
+          - hxx.internal
+
+networks:
+  app-net:
+    external: true
+    name: app-net
