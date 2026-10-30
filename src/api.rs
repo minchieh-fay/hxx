@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use anyhow::Result;
 use axum::{
     Json, Router,
-    extract::{ConnectInfo, Path, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Multipart, Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -38,6 +38,7 @@ pub fn routes(state: AppState) -> Router {
             post(respond_approval),
         )
         .route("/api/dashboard", get(dashboard))
+        .layer(DefaultBodyLimit::max(84 * 1024 * 1024))
         .with_state(state)
 }
 
@@ -53,7 +54,7 @@ impl IntoResponse for ApiError {
 }
 
 /// 描述浏览器创建新会话时提交的内容。
-#[derive(Deserialize)]
+#[derive(Default)]
 pub struct NewSession {
     topic: String,
     environment: String,
@@ -63,9 +64,16 @@ pub struct NewSession {
 }
 
 /// 描述浏览器向现有会话发送的消息。
-#[derive(Deserialize)]
+#[derive(Default)]
 pub struct NewTurn {
     text: String,
+}
+
+/// 保存 multipart 请求中的附件名称、类型和文件内容。
+struct SessionAttachment {
+    name: String,
+    mime_type: String,
+    bytes: Vec<u8>,
 }
 
 /// 描述用户对 Codex 工具审批请求的决定。
@@ -160,9 +168,57 @@ async fn create_session(
     State(state): State<AppState>,
     headers: HeaderMap,
     ConnectInfo(address): ConnectInfo<SocketAddr>,
-    Json(request): Json<NewSession>,
+    mut multipart: Multipart,
 ) -> Result<Json<SessionResponse>, ApiError> {
-    // step.1 校验浏览器身份和会话说明并确保用户记录存在。
+    // step.1 收集新会话的结构化说明和待放入工作区的附件。
+    let mut request = NewSession::default();
+    let mut attachments = Vec::new();
+    while let Some(field) = multipart.next_field().await.map_err(bad_multipart)? {
+        let field_name = field.name().unwrap_or_default().to_owned();
+        if field_name == "files" {
+            let name = field.file_name().unwrap_or("attachment").to_owned();
+            let mime_type = field
+                .content_type()
+                .unwrap_or("application/octet-stream")
+                .to_owned();
+            let bytes = field.bytes().await.map_err(bad_multipart)?.to_vec();
+            if bytes.len() > 20 * 1024 * 1024 {
+                return Err(ApiError(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "单个附件不能超过 20 MB".to_owned(),
+                ));
+            }
+            if attachments.len() >= 20
+                || attachments
+                    .iter()
+                    .map(|item: &SessionAttachment| item.bytes.len())
+                    .sum::<usize>()
+                    + bytes.len()
+                    > 80 * 1024 * 1024
+            {
+                return Err(ApiError(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "最多上传 20 个附件，总大小不能超过 80 MB".to_owned(),
+                ));
+            }
+            attachments.push(SessionAttachment {
+                name,
+                mime_type,
+                bytes,
+            });
+        } else {
+            let value = field.text().await.map_err(bad_multipart)?;
+            match field_name.as_str() {
+                "topic" => request.topic = value,
+                "environment" => request.environment = value,
+                "issue" => request.issue = value,
+                "work" => request.work = value,
+                "notes" => request.notes = value,
+                _ => {}
+            }
+        }
+    }
+    // step.2 校验浏览器身份和会话说明并确保用户记录存在。
     let client_id = client_id(&headers)?;
     validate_session(&request)?;
     state
@@ -175,8 +231,26 @@ async fn create_session(
         .prepare_workspace(&client_id, &session_id)
         .await
         .map_err(codex_error)?;
+    let mut attachment_paths = Vec::new();
+    let mut attachment_names = Vec::new();
+    let mut used_names = std::collections::HashSet::new();
+    for attachment in &attachments {
+        // 调用辅助函数清理浏览器文件名，避免将附件写入会话目录之外。
+        let safe_name = crate::help::help_safe_attachment_name(&attachment.name);
+        // 调用辅助函数为同名附件生成独立文件名，避免后上传文件覆盖前一个。
+        let name = crate::help::help_unique_attachment_name(&safe_name, &mut used_names);
+        let path = state
+            .codex
+            .write_workspace_file(&client_id, &session_id, &name, &attachment.bytes)
+            .await
+            .map_err(codex_error)?;
+        attachment_names.push(name);
+        if attachment.mime_type.starts_with("image/") {
+            attachment_paths.push(path);
+        }
+    }
 
-    // step.2 在远程 App Server 创建该用户和会话专属的工作线程。
+    // step.3 在远程 App Server 创建该用户和会话专属的工作线程。
     let thread_id = state.codex.start_thread(&cwd).await.map_err(codex_error)?;
     let title = request.topic.trim();
     let title = if title.is_empty() { "新会话" } else { title };
@@ -191,15 +265,19 @@ async fn create_session(
         });
     }
 
-    // step.3 保存说明并启动会话首轮 Codex 对话。
+    // step.4 保存说明并启动会话首轮 Codex 对话。
     // 调用辅助函数将会话表单整理成完整 Markdown 首条消息。
-    let prompt = crate::help::help_build_session_prompt(
+    let mut prompt = crate::help::help_build_session_prompt(
         &request.topic,
         &request.environment,
         &request.issue,
         &request.work,
         &request.notes,
     );
+    if !attachments.is_empty() {
+        // 调用辅助函数将上传文件名补充到新会话的任务说明中。
+        prompt.push_str(&crate::help::help_attachment_prompt(&attachment_names));
+    }
     if !state
         .database
         .begin_turn(&client_id, &session_id, &prompt)
@@ -216,6 +294,7 @@ async fn create_session(
         session_id.clone(),
         thread_id,
         prompt,
+        attachment_paths,
     );
     session_response(&state.database, &client_id, &session_id)
         .map(Json)
@@ -239,12 +318,51 @@ async fn send_turn(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(session_id): Path<String>,
-    Json(request): Json<NewTurn>,
+    mut multipart: Multipart,
 ) -> Result<Json<SessionResponse>, ApiError> {
-    // step.1 验证消息内容和会话归属，阻止跨浏览器读取或操作会话。
+    // step.1 收集聊天文本和待放入工作区的附件。
+    let mut request = NewTurn::default();
+    let mut attachments = Vec::new();
+    while let Some(field) = multipart.next_field().await.map_err(bad_multipart)? {
+        if field.name() == Some("text") {
+            request.text = field.text().await.map_err(bad_multipart)?;
+        } else if field.name() == Some("files") {
+            let name = field.file_name().unwrap_or("attachment").to_owned();
+            let mime_type = field
+                .content_type()
+                .unwrap_or("application/octet-stream")
+                .to_owned();
+            let bytes = field.bytes().await.map_err(bad_multipart)?.to_vec();
+            if bytes.len() > 20 * 1024 * 1024 {
+                return Err(ApiError(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "单个附件不能超过 20 MB".to_owned(),
+                ));
+            }
+            if attachments.len() >= 20
+                || attachments
+                    .iter()
+                    .map(|item: &SessionAttachment| item.bytes.len())
+                    .sum::<usize>()
+                    + bytes.len()
+                    > 80 * 1024 * 1024
+            {
+                return Err(ApiError(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "最多上传 20 个附件，总大小不能超过 80 MB".to_owned(),
+                ));
+            }
+            attachments.push(SessionAttachment {
+                name,
+                mime_type,
+                bytes,
+            });
+        }
+    }
+    // step.2 验证消息内容和会话归属，阻止跨浏览器读取或操作会话。
     let client_id = client_id(&headers)?;
     let text = request.text.trim();
-    if text.is_empty() || text.len() > 40_000 {
+    if (text.is_empty() && attachments.is_empty()) || text.len() > 40_000 {
         return Err(ApiError(
             StatusCode::BAD_REQUEST,
             "消息不能为空且不能超过 40000 个字节".to_owned(),
@@ -257,9 +375,30 @@ async fn send_turn(
             "会话当前正在处理其他请求".to_owned(),
         ));
     }
+    let mut attachment_paths = Vec::new();
+    let mut attachment_names = Vec::new();
+    let mut used_names = std::collections::HashSet::new();
+    for attachment in &attachments {
+        // 调用辅助函数清理浏览器文件名，避免将附件写入会话目录之外。
+        let safe_name = crate::help::help_safe_attachment_name(&attachment.name);
+        // 调用辅助函数为同名附件生成独立文件名，避免后上传文件覆盖前一个。
+        let name = crate::help::help_unique_attachment_name(&safe_name, &mut used_names);
+        let path = state
+            .codex
+            .write_workspace_file(&client_id, &session_id, &name, &attachment.bytes)
+            .await
+            .map_err(codex_error)?;
+        attachment_names.push(name);
+        if attachment.mime_type.starts_with("image/") {
+            attachment_paths.push(path);
+        }
+    }
+    // 调用辅助函数把附件文件名补充到用户消息，Codex 可据此读取工作目录中的文件。
+    let attachment_prompt = crate::help::help_attachment_prompt(&attachment_names);
+    let stored_text = format!("{}{}", text, attachment_prompt);
     if !state
         .database
-        .begin_turn(&client_id, &session_id, text)
+        .begin_turn(&client_id, &session_id, &stored_text)
         .map_err(internal_error)?
     {
         return Err(ApiError(
@@ -272,7 +411,8 @@ async fn send_turn(
         client_id.clone(),
         session_id.clone(),
         session.thread_id,
-        text.to_owned(),
+        stored_text,
+        attachment_paths,
     );
     session_response(&state.database, &client_id, &session_id)
         .map(Json)
@@ -372,6 +512,14 @@ fn validate_session(request: &NewSession) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// 把 multipart 解码失败转换为中文请求错误。
+fn bad_multipart(error: axum::extract::multipart::MultipartError) -> ApiError {
+    ApiError(
+        StatusCode::BAD_REQUEST,
+        format!("附件请求格式无效：{error}"),
+    )
+}
+
 /// 验证会话归属并返回数据库中的会话记录。
 fn owned_session(
     database: &Database,
@@ -409,6 +557,7 @@ fn spawn_turn(
     session_id: String,
     thread_id: String,
     text: String,
+    image_paths: Vec<String>,
 ) {
     // step.1 创建事件通道并安排活动写入任务。
     tokio::spawn(async move {
@@ -436,7 +585,10 @@ fn spawn_turn(
         });
 
         // step.2 运行远程 Codex 轮次，并等待所有已收到的增量持久化。
-        let result = state.codex.send_turn(&thread_id, &text, sender).await;
+        let result = state
+            .codex
+            .send_turn(&thread_id, &text, &image_paths, sender)
+            .await;
         let _ = event_writer.await;
 
         // step.3 保存最终回复和 token 用量，或记录可重试的失败状态。

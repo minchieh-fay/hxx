@@ -1,8 +1,9 @@
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::{collections::HashMap, path::Path, process::Stdio, sync::Arc};
 
 use anyhow::{Context, Result, anyhow};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::{
     net::TcpStream,
@@ -134,6 +135,52 @@ impl CodexClient {
         Ok(cwd)
     }
 
+    /// 将浏览器上传的附件写入指定会话的 Codex 工作目录。
+    pub async fn write_workspace_file(
+        &self,
+        client_id: &str,
+        session_id: &str,
+        name: &str,
+        bytes: &[u8],
+    ) -> Result<String> {
+        // step.1 将受控的用户和会话标识映射到 App Server 工作路径。
+        let cwd = format!("/workspaces/{client_id}/{session_id}");
+        // step.2 根据共享目录或 SSH 配置将附件字节写入工作目录。
+        if let Some(target) = &self.workspace_ssh_target {
+            let root = self
+                .workspace_ssh_root
+                .as_ref()
+                .context("设置 SSH 目标时还必须配置 workspace_ssh_root")?;
+            let path = root.join(client_id).join(session_id).join(name);
+            let quoted_path = format!("'{}'", path.display().to_string().replace('\'', "'\\''"));
+            let mut child = Command::new("ssh")
+                .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=8"])
+                .arg(target)
+                .arg(format!("cat > {quoted_path}"))
+                .stdin(Stdio::piped())
+                .spawn()
+                .context("无法启动 SSH 写入会话附件")?;
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin.write_all(bytes).await.context("无法传输会话附件")?;
+            }
+            let status = child.wait().await.context("等待 SSH 写入附件失败")?;
+            if !status.success() {
+                return Err(anyhow!("SSH 写入 Codex 会话附件失败"));
+            }
+        } else if let Some(root) = &self.workspace_root {
+            let path = root.join(client_id).join(session_id).join(name);
+            tokio::fs::write(&path, bytes)
+                .await
+                .with_context(|| format!("无法写入会话附件 {}", path.display()))?;
+        } else {
+            return Err(anyhow!(
+                "请配置 workspace_root 或 workspace_ssh_target 才能上传附件"
+            ));
+        }
+        // step.3 返回 App Server 可直接读取的容器内路径。
+        Ok(format!("{cwd}/{name}"))
+    }
+
     /// 启动独立 Codex 线程并返回 App Server 分配的线程 ID。
     pub async fn start_thread(&self, cwd: &str) -> Result<String> {
         let params = json!({
@@ -157,11 +204,19 @@ impl CodexClient {
         &self,
         thread_id: &str,
         text: &str,
+        image_paths: &[String],
         events: UnboundedSender<CodexEvent>,
     ) -> Result<TurnResult> {
+        let mut input = vec![json!({ "type": "text", "text": text })];
+        input.extend(image_paths.iter().map(|path| {
+            json!({
+                "type": "localImage",
+                "path": path,
+            })
+        }));
         let params = json!({
             "threadId": thread_id,
-            "input": [{ "type": "text", "text": text }],
+            "input": input,
             "approvalPolicy": "never",
             "sandbox": "danger-full-access"
         });

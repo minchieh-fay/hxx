@@ -29,6 +29,65 @@ pub fn help_build_session_prompt(
     )
 }
 
+/// 从用户文件名中提取安全的工作区文件名，避免目录穿越和空名称。
+pub fn help_safe_attachment_name(name: &str) -> String {
+    let basename = std::path::Path::new(name)
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("attachment");
+    let cleaned = basename
+        .chars()
+        .filter(|character| !character.is_control() && *character != '/' && *character != '\\')
+        .collect::<String>();
+    if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
+        "attachment".to_owned()
+    } else {
+        cleaned
+    }
+}
+
+/// 为同一轮上传中的同名文件生成不冲突的工作区文件名。
+pub fn help_unique_attachment_name(
+    name: &str,
+    used_names: &mut std::collections::HashSet<String>,
+) -> String {
+    // step.1 优先保留不冲突的原文件名。
+    if used_names.insert(name.to_owned()) {
+        return name.to_owned();
+    }
+    // step.2 为同名文件依次生成带编号的候选名称。
+    let path = std::path::Path::new(name);
+    let stem = path
+        .file_stem()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("attachment");
+    let extension = path.extension().and_then(std::ffi::OsStr::to_str);
+    let mut index = 2;
+    loop {
+        let candidate = match extension {
+            Some(extension) => format!("{stem} ({index}).{extension}"),
+            None => format!("{stem} ({index})"),
+        };
+        if used_names.insert(candidate.clone()) {
+            return candidate;
+        }
+        index += 1;
+    }
+}
+
+/// 将上传附件清单追加到发给 Codex 的 Markdown 消息中。
+pub fn help_attachment_prompt(names: &[String]) -> String {
+    if names.is_empty() {
+        return String::new();
+    }
+    let entries = names
+        .iter()
+        .map(|name| format!("- `{name}`"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("\n\n# 附件\n已放入当前会话工作目录，请结合任务查看：\n{entries}")
+}
+
 /// 从 App Server 消息中提取当前轮次的输入和输出 token 数。
 pub fn help_token_counts(value: &serde_json::Value) -> (i64, i64) {
     let usage = value

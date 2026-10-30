@@ -28,6 +28,12 @@ interface Message {
   created_at: string
 }
 
+/** 描述待上传文件及其可选的本地图片预览地址。 */
+interface PendingAttachment {
+  file: File
+  previewUrl: string | null
+}
+
 /** 描述会话详情 API 返回的数据。 */
 interface SessionResponse {
   session: Session
@@ -87,6 +93,11 @@ const isInterrupting = ref(false)
 const respondingApproval = ref<string | null>(null)
 const loadingSession = ref(false)
 const composerText = ref('')
+const sessionAttachments = ref<PendingAttachment[]>([])
+const composerAttachments = ref<PendingAttachment[]>([])
+const sessionFileInput = ref<HTMLInputElement | null>(null)
+const composerFileInput = ref<HTMLInputElement | null>(null)
+const draggingFiles = ref(false)
 const renameOpen = ref(false)
 const renameValue = ref('')
 const clockNow = ref(Date.now())
@@ -139,7 +150,9 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers)
   headers.set('X-Client-Id', clientId ?? '')
   headers.set('X-Client-Name', profile.value?.name ?? localStorage.getItem(nameKey) ?? clientId ?? '')
-  if (options.body) headers.set('Content-Type', 'application/json')
+  if (options.body && !(options.body instanceof FormData)) {
+    headers.set('Content-Type', 'application/json')
+  }
   const response = await fetch(path, { ...options, headers })
   if (!response.ok) {
     const body = await response.json().catch(() => ({ error: '请求失败' }))
@@ -195,6 +208,8 @@ function startNewSession(): void {
   form.issue = ''
   form.work = ''
   form.notes = ''
+  clearAttachments(sessionAttachments.value)
+  sessionAttachments.value = []
   mode.value = 'editing'
 }
 
@@ -207,9 +222,12 @@ async function confirmNewSession(): Promise<void> {
   }
   isSending.value = true
   try {
+    const body = new FormData()
+    Object.entries(form).forEach(([key, value]) => body.append(key, value))
+    sessionAttachments.value.forEach(({ file }) => body.append('files', file))
     const result = await api<SessionResponse>('/api/sessions', {
       method: 'POST',
-      body: JSON.stringify(form),
+      body,
     })
 
     // step.2 更新会话列表并进入新会话对话页面。
@@ -217,6 +235,8 @@ async function confirmNewSession(): Promise<void> {
     isSending.value = result.session.working
     sessions.value = await api<Session[]>('/api/sessions')
     mode.value = 'chat'
+    clearAttachments(sessionAttachments.value)
+    sessionAttachments.value = []
     if (isSending.value) scheduleSessionRefresh(result.session.id)
     ElMessage.success('会话已创建')
   } catch (error) {
@@ -230,9 +250,11 @@ async function confirmNewSession(): Promise<void> {
 async function sendMessage(): Promise<void> {
   // step.1 检查会话和消息输入，锁定当前提交内容。
   const text = composerText.value.trim()
-  if (!activeSession.value || !text || isSending.value) return
+  if (!activeSession.value || (!text && composerAttachments.value.length === 0) || isSending.value) return
+  const sentAttachments = composerAttachments.value
   const previousSession = activeSession.value
   composerText.value = ''
+  composerAttachments.value = []
   isSending.value = true
   activeSession.value = {
     ...previousSession,
@@ -241,27 +263,95 @@ async function sendMessage(): Promise<void> {
       {
         id: Date.now(),
         role: 'user',
-        content: text,
+        content: `${text}${attachmentLabel(sentAttachments)}`,
         created_at: new Date().toISOString(),
       },
     ],
   }
   try {
     // step.2 调用会话线程并刷新最新回复与列表活动时间。
+    const body = new FormData()
+    body.append('text', text)
+    sentAttachments.forEach(({ file }) => body.append('files', file))
     activeSession.value = await api<SessionResponse>(
       `/api/sessions/${previousSession.session.id}/turns`,
-      { method: 'POST', body: JSON.stringify({ text }) },
+      { method: 'POST', body },
     )
+    clearAttachments(sentAttachments)
     isSending.value = activeSession.value.session.working
     sessions.value = await api<Session[]>('/api/sessions')
     if (isSending.value) scheduleSessionRefresh(activeSession.value.session.id)
   } catch (error) {
     composerText.value = text
+    composerAttachments.value = sentAttachments
     activeSession.value = previousSession
     ElMessage.error(error instanceof Error ? error.message : '发送消息失败')
   } finally {
     isSending.value = activeSession.value?.session.working ?? false
   }
+}
+
+/** 把选择、拖放或粘贴的文件加入指定附件队列。 */
+function addAttachments(files: FileList | File[], target: 'session' | 'composer'): void {
+  // step.1 合并用户提供的文件并跳过已经加入的同名同尺寸文件。
+  const queue = target === 'session' ? sessionAttachments : composerAttachments
+  const additions = Array.from(files)
+    .filter((file) => !queue.value.some((item) => (
+      item.file.name === file.name && item.file.size === file.size
+    )))
+    .map((file) => ({
+      file,
+      previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : null,
+    }))
+  // step.2 统一限制总上传体积并更新预览队列。
+  const total = [...queue.value, ...additions].reduce((sum, item) => sum + item.file.size, 0)
+  if (total > 80 * 1024 * 1024) {
+    additions.forEach((item) => item.previewUrl && URL.revokeObjectURL(item.previewUrl))
+    ElMessage.warning('附件总大小不能超过 80 MB')
+    return
+  }
+  queue.value.push(...additions)
+}
+
+/** 将文件选择器选中的文件加入队列并清空控件值以支持重复选择。 */
+function selectAttachments(event: Event, target: 'session' | 'composer'): void {
+  const input = event.target as HTMLInputElement
+  addAttachments(input.files ?? [], target)
+  input.value = ''
+}
+
+/** 释放图片预览地址并从待发送队列移除指定文件。 */
+function removeAttachment(target: 'session' | 'composer', index: number): void {
+  const queue = target === 'session' ? sessionAttachments : composerAttachments
+  const [removed] = queue.value.splice(index, 1)
+  if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl)
+}
+
+/** 释放附件队列中的临时图片预览地址。 */
+function clearAttachments(items: PendingAttachment[]): void {
+  items.forEach((item) => item.previewUrl && URL.revokeObjectURL(item.previewUrl))
+}
+
+/** 为本地乐观消息生成可识别的附件清单。 */
+function attachmentLabel(items: PendingAttachment[]): string {
+  if (!items.length) return ''
+  return `\n\n附件：${items.map(({ file }) => file.name).join('、')}`
+}
+
+/** 接收系统剪贴板中的图片并放入当前附件队列。 */
+function pasteAttachments(event: ClipboardEvent, target: 'session' | 'composer'): void {
+  const files = Array.from(event.clipboardData?.items ?? [])
+    .filter((item) => item.kind === 'file')
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => file !== null)
+  if (files.length) addAttachments(files, target)
+}
+
+/** 处理拖放文件并在拖拽期间保持附件区域提示状态。 */
+function dropAttachments(event: DragEvent, target: 'session' | 'composer'): void {
+  draggingFiles.value = false
+  const files = event.dataTransfer?.files
+  if (files?.length) addAttachments(files, target)
 }
 
 /** 请求 App Server 中断当前会话正在运行的轮次。 */
@@ -534,7 +624,15 @@ onUnmounted(() => {
       </main>
 
       <main v-else class="main-panel conversation-page">
-        <section v-if="mode === 'editing'" class="session-form-page">
+        <section
+          v-if="mode === 'editing'"
+          class="session-form-page"
+          :class="{ 'file-drop-active': draggingFiles }"
+          @dragover.prevent="draggingFiles = true"
+          @dragleave="draggingFiles = false"
+          @drop.prevent="dropAttachments($event, 'session')"
+          @paste="pasteAttachments($event, 'session')"
+        >
           <div class="page-heading">
             <div>
               <p class="eyebrow">新会话</p>
@@ -583,8 +681,32 @@ onUnmounted(() => {
               />
             </label>
           </div>
+          <input
+            ref="sessionFileInput"
+            class="file-input"
+            type="file"
+            multiple
+            @change="selectAttachments($event, 'session')"
+          />
+          <div v-if="sessionAttachments.length" class="attachment-list">
+            <div
+              v-for="(item, index) in sessionAttachments"
+              :key="`${item.file.name}-${item.file.size}-${index}`"
+              class="attachment-item"
+            >
+              <img v-if="item.previewUrl" :src="item.previewUrl" :alt="item.file.name" />
+              <span>{{ item.file.name }}</span>
+              <el-button text circle aria-label="移除附件" @click="removeAttachment('session', index)">
+                <el-icon><Close /></el-icon>
+              </el-button>
+            </div>
+          </div>
           <div class="form-actions">
             <el-button @click="mode = 'chat'">取消</el-button>
+            <el-button @click="sessionFileInput?.click()">
+              <el-icon><Upload /></el-icon>
+              添加文件
+            </el-button>
             <el-button type="primary" @click="mode = 'preview'">预览说明</el-button>
           </div>
         </section>
@@ -597,6 +719,9 @@ onUnmounted(() => {
             </div>
           </div>
           <pre class="markdown-preview">{{ previewMarkdown }}</pre>
+          <p v-if="sessionAttachments.length" class="preview-attachments">
+            附件：{{ sessionAttachments.map(({ file }) => file.name).join('、') }}
+          </p>
           <div class="form-actions">
             <el-button @click="mode = 'editing'">继续编辑</el-button>
             <el-button type="primary" :loading="isSending" @click="confirmNewSession">
@@ -680,16 +805,56 @@ onUnmounted(() => {
             </div>
             <el-empty v-if="!activeSession.messages.length" description="发送第一条消息开始对话" />
           </section>
-          <form class="composer" @submit.prevent="sendMessage">
+          <form
+            class="composer"
+            :class="{ 'file-drop-active': draggingFiles }"
+            @submit.prevent="sendMessage"
+            @dragover.prevent="draggingFiles = true"
+            @dragleave="draggingFiles = false"
+            @drop.prevent="dropAttachments($event, 'composer')"
+          >
+            <input
+              ref="composerFileInput"
+              class="file-input"
+              type="file"
+              multiple
+              @change="selectAttachments($event, 'composer')"
+            />
+            <div v-if="composerAttachments.length" class="attachment-list composer-attachments">
+              <div
+                v-for="(item, index) in composerAttachments"
+                :key="`${item.file.name}-${item.file.size}-${index}`"
+                class="attachment-item"
+              >
+                <img v-if="item.previewUrl" :src="item.previewUrl" :alt="item.file.name" />
+                <span>{{ item.file.name }}</span>
+                <el-button text circle aria-label="移除附件" @click="removeAttachment('composer', index)">
+                  <el-icon><Close /></el-icon>
+                </el-button>
+              </div>
+            </div>
             <el-input
               v-model="composerText"
               type="textarea"
               :autosize="{ minRows: 2, maxRows: 8 }"
               placeholder="向 Codex 发送消息"
               :disabled="isSending"
+              @paste="pasteAttachments($event, 'composer')"
             />
             <div class="composer-actions">
-              <el-button type="primary" :disabled="!composerText.trim() || isSending" native-type="submit">
+              <el-button
+                aria-label="添加附件"
+                title="添加附件"
+                :disabled="isSending"
+                @click="composerFileInput?.click()"
+              >
+                <el-icon><Upload /></el-icon>
+              </el-button>
+              <el-button
+                type="primary"
+                :disabled="(!composerText.trim() && !composerAttachments.length) || isSending"
+                native-type="submit"
+              >
                 <el-icon><Promotion /></el-icon>
                 发送
               </el-button>
